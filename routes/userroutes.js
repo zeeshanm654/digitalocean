@@ -719,6 +719,7 @@ router.post("/findCreator", async (req, res) => {
   } catch (error) {
     console.error("Error during registration:", error);
     res.json({
+      error: error,
       status: "error",
       message: "Something want wrong",
     });
