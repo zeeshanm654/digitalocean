@@ -21,7 +21,7 @@ app.use("/uploads", express.static("uploads"));
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3005','http://localhost:3000', 'chrome-extension://blnlaibiljcjljkbobcahdlgagffjmaf', 'chrome-extension://bgggiphafimecneehikhfbonbmfhdefl'],
+  origin: ['http://localhost:3005','http://localhost:3000', 'chrome-extension://blnlaibiljcjljkbobcahdlgagffjmaf', 'chrome-extension://blnlaibiljcjljkbobcahdlgagffjmaf'],
   methods: ['GET', 'POST']
 }));
 

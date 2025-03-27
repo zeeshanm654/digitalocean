@@ -368,7 +368,8 @@ let browser, page;
 async function launchBrowser() {
   // browser = await puppeteer.launch({ headless: false });
   browser = await puppeteer.launch({
-    headless: "new",
+    headless: false,
+    // headless: false,
     args: ["--start-maximized", "--no-sandbox", "--disable-setuid-sandbox"], // Maximizes the browser window
     defaultViewport: null, // Ensures no viewport resizing
   });
@@ -470,12 +471,28 @@ router.post("/linkedAccount", async (req, res) => {
         userid: authUser,
         status: "active",
       });
-      // Modify the imageUrl if it's 'user.png'
+
+      const ids = data.map(item => item._id);
+      // console.log(ids);
+
+      // Find all commentSettings where linkedAccountId matches the ids
+      const linkedAccountToggle = await CommentSetting.find({ linkedAccountId: { $in: ids }, creatorid: "0" });
+      // console.log("🚀 ~ router.post ~ linkedAccountToggle:", linkedAccountToggle);
+
+      // Map commentSettings to the respective linked account
       data.forEach(entry => {
+        // Modify the imageUrl if it's 'user.png'
         if (entry.imageUrl === 'user.png') {
           entry.imageUrl = `${backendURL}uploads/images/user.png`;
         }
+
+        // Get the commentSettings for the current entry
+        const entrySettings = linkedAccountToggle.filter(toggle => toggle.linkedAccountId.toString() === entry._id.toString());
+
+        // Add the filtered settings to the entry
+        entry.set("commentSettings", entrySettings[0], { strict: false });
       });
+
       return res.json({
         data,
         totalActiveAccounts: data.length,
@@ -523,7 +540,7 @@ router.post("/linkedAccountPageStatus", async (req, res) => {
     if (authUser) {
       const linkedAccount = await LinkedAccount.findOne({ _id: id });
       let pageData = JSON.parse(linkedAccount.pageData);
-      
+
       pageData = pageData.map(page => {
         // console.log("pages:", page)
         if (value == true) {
@@ -535,14 +552,14 @@ router.post("/linkedAccountPageStatus", async (req, res) => {
           // When value is false, only change the status of the matched page
           return page._id === pageId ? { ...page, status: false } : page;
         }
-      });      
+      });
 
       // console.log("pageData:", pageData)
 
       linkedAccount.pageData = JSON.stringify(pageData);
-      
+
       await linkedAccount.save();
-      
+
       return res.json({
         status: "success",
         message: "Linked Account Page Status Updated",
@@ -596,6 +613,7 @@ router.post("/findCreator", async (req, res) => {
   const postData = req.body;
   const linkedAccountId = CleanHTMLData(CleanDBData(postData.selectedAccountId));
   const creatorLink = CleanHTMLData(CleanDBData(postData.creatorLink));
+  const linkedAccountPageId = CleanHTMLData(CleanDBData(postData.selectedAccountPageId));
   const toggles = JSON.parse(postData.toggles);
 
   try {
@@ -636,14 +654,28 @@ router.post("/findCreator", async (req, res) => {
 
       console.log("Profile Image URL:", profileData);
 
-      const newCreator = {
-        linkedAccountId,
-        url: creatorLink,
-        imageUrl: profileData.imageUrl,
-        tagLine: profileData.tagLine,
-        name: profileData.name,
-        status: "active",
-      };
+      let newCreator
+
+      if (linkedAccountPageId != "undefined") {
+        newCreator = {
+          linkedAccountId,
+          linkedAccountPageId,
+          url: creatorLink,
+          imageUrl: profileData.imageUrl,
+          tagLine: profileData.tagLine,
+          name: profileData.name,
+          status: "active",
+        };
+      } else {
+        newCreator = {
+          linkedAccountId,
+          url: creatorLink,
+          imageUrl: profileData.imageUrl,
+          tagLine: profileData.tagLine,
+          name: profileData.name,
+          status: "active",
+        };
+      }
 
       // Find the creator by the linkedAccountId (or any other unique identifier) and update, or create a new one if it doesn't exist
       const updatedCreator = await Creator.findOneAndUpdate(
@@ -695,15 +727,25 @@ router.post("/findCreator", async (req, res) => {
 
 router.post("/getCreator", async (req, res) => {
   const postData = req.body;
-  const id = CleanHTMLData(CleanDBData(postData.id));
+  const selectedAccount = CleanHTMLData(CleanDBData(postData.selectedAccount));
+  const linkedAccountPageId = CleanHTMLData(CleanDBData(postData.selectedAccountPage));
+
   try {
     const authUser = await checkAuthorization(req, res);
     if (authUser) {
-      const data = await Creator.find({
-        linkedAccountId: id,
-        status: "active",
-      });
-
+      let data;
+      if (linkedAccountPageId != "undefined") {
+        data = await Creator.find({
+          linkedAccountId: selectedAccount,
+          linkedAccountPageId,
+          status: "active",
+        });
+      } else {
+        data = await Creator.find({
+          linkedAccountId: selectedAccount,
+          status: "active",
+        });
+      }
       res.json({
         status: "success",
         data: data,
@@ -713,7 +755,7 @@ router.post("/getCreator", async (req, res) => {
     console.error("Error during registration:", error);
     res.json({
       status: "error",
-      message: "Something want wrong",
+      message: "Something went wrong",
     });
   }
 });
@@ -721,10 +763,21 @@ router.post("/getCreator", async (req, res) => {
 router.post("/deleteCreator", async (req, res) => {
   const postData = req.body;
   const id = CleanHTMLData(CleanDBData(postData.id));
+  const selectedAccountPage = CleanHTMLData(CleanDBData(postData.selectedAccountPage));
+
   try {
     const authUser = await checkAuthorization(req, res);
     if (authUser) {
-      await Creator.findOneAndUpdate({ _id: id }, { status: "inactive" });
+      if (selectedAccountPage != "undefined") {
+        await Creator.findByIdAndUpdate(
+          { _id: id },
+          { $unset: { linkedAccountPageId: 1 } }, // Removes the field
+          { new: true }
+        );
+      }
+      else {
+        await Creator.findOneAndUpdate({ _id: id }, { status: "inactive" });
+      }
 
       res.json({
         status: "success",
@@ -742,15 +795,20 @@ router.post("/deleteCreator", async (req, res) => {
 
 router.post("/findLinkedAccountSetting", async (req, res) => {
   const postData = req.body;
-  const id = CleanHTMLData(CleanDBData(postData.id));
+  const ids = postData.id
+  // console.log("🚀 ~ router.post ~ ids:", ids)
 
   try {
     const authUser = await checkAuthorization(req, res);
     if (authUser) {
-      const linkedAccount = await CommentSetting.findOne({ linkedAccountId: id })
+      const linkedAccountToggle = await CommentSetting.find({ linkedAccountId: { $in: ids } })
+      const linkedAccountToneGender = await LinkedAccountTone.find({ linkedAccountId: { $in: ids } })
+      // console.log("🚀 ~ router.post ~ linkedAccountToggle:", linkedAccountToggle)
+
       res.json({
         status: "success",
-        data: linkedAccount,
+        linkedAccountToggle,
+        linkedAccountToneGender
       });
     }
   } catch (error) {
@@ -853,6 +911,33 @@ router.post("/singleUpdateCommentSettingCreatorAccount", async (req, res) => {
   }
 });
 
+router.post("/importPageData", async (req, res) => {
+  const postData = req.body;
+  const selectedAccount = CleanHTMLData(CleanDBData(postData.selectedAccount));
+  const linkedAccountPageId = CleanHTMLData(CleanDBData(postData.selectedAccountPage));
+
+  try {
+    const authUser = await checkAuthorization(req, res);
+    if (authUser) {
+      const updatedData = await Creator.updateMany(
+        { linkedAccountId: selectedAccount, status: "active", },
+        { $set: { linkedAccountPageId, }, }
+      );
+
+      res.json({
+        status: "success",
+        message: `Setting updated`,
+      });
+    }
+  } catch (error) {
+    console.error("Error during registration:", error);
+    res.json({
+      status: "error",
+      message: "Something want wrong",
+    });
+  }
+});
+
 // tone
 router.post("/linkedAccountGetToneAllByUserId", async (req, res) => {
   const postData = req.body;
@@ -929,6 +1014,35 @@ router.post("/linkedAccountUpdateTone", async (req, res) => {
       res.json({
         status: "success",
         message: `${title.charAt(0).toUpperCase() + title.slice(1)} updated successfully`
+      });
+    }
+  } catch (error) {
+    console.error("Error during registration:", error);
+    res.json({
+      status: "error",
+      message: "Something want wrong",
+    });
+  }
+});
+
+router.post("/linkedAccountGenderChange", async (req, res) => {
+  const postData = req.body;
+  const linkedAccountId = CleanHTMLData(CleanDBData(postData.linkedAccountId));
+  const value = CleanHTMLData(CleanDBData(postData.value));
+
+  try {
+    const authUser = await checkAuthorization(req, res);
+    if (authUser) {
+
+      await LinkedAccountTone.findOneAndUpdate(
+        { linkedAccountId: linkedAccountId },
+        { gender: value },
+        { new: true, upsert: true }
+      );
+
+      res.json({
+        status: "success",
+        message: 'Gender Updated successfully'
       });
     }
   } catch (error) {
@@ -1595,7 +1709,147 @@ router.post("/cronjobForTagSearch", async (req, res) => {
   }
 });
 
+// router.post("/cronjobToSinglePostCommentURLBase", async (req, res) => {
+//   const postData = req.body;
+//   const PostUrl = CleanHTMLData(CleanDBData(postData.url));
 
+//   try {
+//     await page.goto(PostUrl, { waitUntil: "load", timeout: 60000 });
+
+//     // find the comment input box and type the comment
+//     await page.waitForSelector("main");
+//     await page.waitForSelector(
+//       "div.update-components-text.update-components-update-v2__commentary"
+//     );
+
+// const postData = await page.evaluate(() => {
+//   // Select the first matching element
+//   return (
+//     document
+//       .querySelector(
+//         "div.update-components-text.update-components-update-v2__commentary"
+//       )
+//       .textContent.trim() || "No post found"
+//   );
+// });
+// console.log("🚀 ~ PostData:", postData);
+
+
+//     const commentText = "Hello World";
+
+//     // const commentText = "Good post!";
+//     const commentBoxSelector = `div.ql-editor[contenteditable="true"]`;
+//     // Wait for the comment box to appear
+//     await page.waitForSelector(commentBoxSelector, {
+//       visible: true,
+//       timeout: 10000,
+//     });
+//     // Focus on the comment box
+//     await page.focus(commentBoxSelector);
+//     // Type the comment
+//     await page.type(commentBoxSelector, commentText);
+//     console.log("Comment typed successfully.");
+//     const commentButtonSelector = `button.comments-comment-box__submit-button--cr`;
+//     // Ensure the Comment button is enabled and visible
+//     await page.waitForSelector(commentButtonSelector, { visible: true });
+//     // Click on the Comment button
+//     await page.click(commentButtonSelector);
+//     console.log("Comment posted successfully.");
+
+
+
+
+
+//     res.json({
+//       status: "success",
+//       message: `Cron job is executed`,
+//     });
+//   } catch (error) {
+//     console.error("Error during registration:", error);
+//     res.json({
+//       status: "error",
+//       message: "Something want wrong",
+//     });
+//   }
+// });
+
+router.post("/cronjobToSinglePostReactAndComment", async (req, res) => {
+  const PostUrl = "https://www.linkedin.com/posts/faisal-akhtar-663650296_git-code-devlife-activity-7298535715586347008-pB7-?utm_source=share&utm_medium=member_desktop&rcm=ACoAAEekgKsBrmFcR47JU7h_Z3yCBkb1MWaWAqQ"
+  const comment = "Great post!";
+  const reactionType = "Support";
+
+  try {
+    await page.goto(PostUrl, { waitUntil: "load", timeout: 60000 });
+
+    // Wait for the post container
+    await page.waitForSelector("main");
+    await page.waitForSelector("div.update-components-text.update-components-update-v2__commentary");
+
+    console.log("Navigated to post successfully.");
+
+    const postData = await page.evaluate(() => {
+      // Select the first matching element
+      return ( document.querySelector("div.update-components-text.update-components-update-v2__commentary").textContent.trim() || "No post found"
+      );});
+
+    console.log("🚀 ~ PostData:", postData);
+
+    // Commenting on the post (if provided)
+    if (comment) {
+      const commentBoxSelector = `div.ql-editor[contenteditable="true"]`;
+      await page.waitForSelector(commentBoxSelector, { visible: true, timeout: 10000 });
+      await page.focus(commentBoxSelector);
+      await page.type(commentBoxSelector, comment);
+      console.log("Comment typed successfully.");
+
+      const commentButtonSelector = `button.comments-comment-box__submit-button--cr`;
+      await page.waitForSelector(commentButtonSelector, { visible: true });
+      await page.click(commentButtonSelector);
+      console.log("Comment posted successfully.");
+    }
+
+    // Reacting to the post (if provided)
+    if (reactionType) {
+      const reactionButtonSelector = `button.react-button__trigger`;
+
+      // Hover over the reaction button to reveal the options
+      await page.waitForSelector(reactionButtonSelector, { visible: true });
+      await page.hover(reactionButtonSelector);
+      console.log("Hovered over the reaction button.");
+
+      // Define reaction selector based on type
+      const reactionSelectors = {
+        like: "button[aria-label='React Like']",
+        celebrate: "button[aria-label='React Celebrate']",
+        support: "button[aria-label='React Support']",
+        love: "button[aria-label='React Love']",
+        insightful: "button[aria-label='React Insightful']",
+        funny: "button[aria-label='React Funny']",
+      };
+
+      if (reactionSelectors[reactionType.toLowerCase()]) {
+        // Wait for reaction options to appear
+        await page.waitForSelector(reactionSelectors[reactionType.toLowerCase()], { visible: true });
+        // Click on the desired reaction
+        await page.click(reactionSelectors[reactionType.toLowerCase()]);
+        console.log(`Reaction '${reactionType}' added successfully.`);
+      } else {
+        console.log("Invalid reaction type provided.");
+      }
+    }
+
+    res.json({
+      status: "success",
+      message: `Cron job executed: ${reactionType ? `Reacted with ${reactionType}.` : ""} ${comment ? "Comment added." : ""}`,
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    res.json({
+      status: "error",
+      message: "Something went wrong",
+    });
+  }
+});
 
 
 

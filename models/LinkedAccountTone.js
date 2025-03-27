@@ -9,6 +9,7 @@ const LinkedAccountTone = new mongoose.Schema({
     questionsFrequency: { type: String, required: true, },
     commentsLength: { type: String, required: true, },
     personality: { type: String, required: true, },
+    gender: { type: String, },
 }, { timestamps: true });
 
 module.exports = mongoose.model('LinkedAccountTone', LinkedAccountTone);
